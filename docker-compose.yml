@@ -1,0 +1,50 @@
+services:
+
+  # ── PostgreSQL Database ─────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-monitoring_db}
+    ports:
+      - "5433:5432"   # 5433 on host to avoid conflict with local PostgreSQL on 5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────
+  backend:
+    build: .            # Builds using ./Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"     # Direct access at http://localhost:8000/docs
+    depends_on:
+      db:
+        condition: service_healthy   # Wait for Postgres healthcheck before starting
+    env_file:
+      - .env            # Loads SECRET_KEY, SMTP credentials, etc.
+    environment:
+      # Overrides localhost DATABASE_URL with container internal network @db:5432
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-monitoring_db}
+
+  # ── Nginx Frontend ───────────────────────────────────────────────────────
+  frontend:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"         # Main entry point — http://localhost
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+
+# ── Named Volumes ──────────────────────────────────────────────────────────
+volumes:
+  postgres_data:   # DB data persists even when containers are stopped

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monitor Detail — API Pulse</title>
+  <meta name="description" content="Detailed uptime stats, response time chart, and check logs for your monitor." />
+  <link rel="stylesheet" href="css/styles.css?v=3" />
+</head>
+<body>
+
+<!-- ── Navbar ─────────────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="container navbar-inner">
+    <a class="navbar-brand" href="dashboard.html">
+      <span class="brand-icon">⚡</span>
+      API Pulse
+    </a>
+    <div class="navbar-right">
+      <span class="user-email" id="user-email">—</span>
+      <button class="btn-link" id="logout-btn">Sign out</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Main Content ───────────────────────────────────────── -->
+<main class="container" style="padding-top: 28px; padding-bottom: 60px;">
+
+  <!-- Back link -->
+  <a class="back-link" href="dashboard.html">
+    ← Back to Dashboard
+  </a>
+
+  <!-- Detail Header -->
+  <div class="detail-header" id="detail-header">
+    <div class="detail-header-left">
+      <h2 id="monitor-name" style="font-size:1.4rem;">Loading…</h2>
+      <span class="detail-url" id="monitor-url">—</span>
+    </div>
+    <div class="detail-header-right">
+      <span class="status-badge pending" id="status-badge">PENDING</span>
+      <button class="btn btn-secondary btn-sm" id="trigger-btn" title="Run an immediate check now">⚡ Test Now</button>
+      <button class="btn btn-secondary btn-sm" id="pause-btn">⏸ Pause</button>
+      <button class="btn btn-danger btn-sm"    id="delete-btn">🗑 Delete</button>
+    </div>
+  </div>
+
+  <!-- ── Stat Cards ──────────────────────────────────────── -->
+  <div class="stat-cards">
+    <div class="stat-card">
+      <div class="stat-label">Uptime (all time)</div>
+      <div class="stat-value" id="stat-uptime">—</div>
+      <div class="stat-sub" id="stat-checks">— total checks</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg Response Time</div>
+      <div class="stat-value" id="stat-resp">—</div>
+      <div class="stat-sub">milliseconds</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Check Interval</div>
+      <div class="stat-value" id="stat-interval">—</div>
+      <div class="stat-sub">minutes</div>
+    </div>
+  </div>
+
+  <!-- ── 90-Day Uptime Bar ───────────────────────────────── -->
+  <div class="uptime-bar-wrap">
+    <div class="flex justify-between items-center" style="margin-bottom:12px;">
+      <span class="uptime-bar-title">90-Day Uptime</span>
+      <span class="text-muted text-xs" id="uptime-percent-label"></span>
+    </div>
+    <div class="uptime-bar" id="uptime-bar">
+      <!-- Rendered by monitor.js -->
+    </div>
+    <div class="flex justify-between text-xs text-muted" style="margin-top:6px;">
+      <span>90 days ago</span>
+      <span>Today</span>
+    </div>
+  </div>
+
+  <!-- ── Response Time Chart ─────────────────────────────── -->
+  <div class="chart-wrap">
+    <div class="flex justify-between items-center" style="margin-bottom:12px;">
+      <span class="font-semibold" style="font-size:0.9rem;">Response Time (last 50 checks)</span>
+    </div>
+    <canvas id="response-chart"></canvas>
+  </div>
+
+  <!-- ── Alert Channels ──────────────────────────────────── -->
+  <div class="alert-section">
+    <div class="flex justify-between items-center" style="margin-bottom:16px;">
+      <h3 style="font-size:0.95rem;">Alert Channels</h3>
+      <button class="btn btn-secondary btn-sm" id="add-alert-btn">+ Add Channel</button>
+    </div>
+
+    <!-- Add channel form (hidden by default) -->
+    <div id="alert-form-wrap" style="display:none; margin-bottom:16px; padding:16px; background:var(--surface-2); border-radius:var(--radius-sm); border:1px solid var(--border);">
+      <div class="error-msg" id="alert-error"></div>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="form-group" style="flex:1;min-width:140px;">
+          <label class="form-label" for="alert-type">Channel Type</label>
+          <select class="form-select" id="alert-type" onchange="toggleAlertFields()">
+            <option value="slack">Slack</option>
+            <option value="discord">Discord</option>
+            <option value="email">Email</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex:3;min-width:220px;" id="alert-webhook-group">
+          <label class="form-label" for="alert-webhook">Webhook URL</label>
+          <input class="form-input" type="url" id="alert-webhook" placeholder="https://hooks.slack.com/…" />
+        </div>
+        <div class="form-group" style="flex:3;min-width:220px;display:none;" id="alert-email-group">
+          <label class="form-label" for="alert-email">Email Address</label>
+          <input class="form-input" type="email" id="alert-email" placeholder="you@example.com" />
+        </div>
+        <div style="display:flex;gap:8px;padding-bottom:1px;">
+          <button class="btn btn-primary btn-sm" id="alert-save-btn">Save</button>
+          <button class="btn btn-secondary btn-sm" id="alert-cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Channel list -->
+    <p class="text-muted text-sm" id="no-channels-msg">No alert channels configured.</p>
+    <div id="alert-channels-list"></div>
+  </div>
+
+  <!-- ── Check Log Table ─────────────────────────────────── -->
+  <div class="table-wrap">
+    <div class="table-head flex justify-between items-center">
+      <span>Recent Checks</span>
+      <span class="text-muted text-sm">Last 50</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Status Code</th>
+          <th>Response</th>
+          <th>Result</th>
+          <th>Assertions</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody id="log-tbody">
+        <tr><td colspan="6" class="text-muted" style="text-align:center;padding:32px;">Loading logs…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</main>
+
+<!-- ── Toast container ────────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- Chart.js via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="js/api.js?v=3"></script>
+<script src="js/monitor.js?v=4"></script>
+</body>
+</html>

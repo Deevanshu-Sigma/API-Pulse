@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Create Account — API Pulse</title>
+  <meta name="description" content="Create your API Pulse account and start monitoring your websites for free." />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<main class="auth-page">
+  <div class="auth-card">
+
+    <!-- Brand -->
+    <div class="auth-brand">
+      <div class="auth-brand-icon">⚡</div>
+      <h1>API Pulse</h1>
+      <p>Create your account to get started.</p>
+    </div>
+
+    <!-- Error message -->
+    <div class="error-msg" id="register-error"></div>
+
+    <!-- Register Form -->
+    <form class="auth-form" id="register-form" novalidate>
+      <div class="form-group">
+        <label class="form-label" for="reg-email">Email address</label>
+        <input
+          class="form-input"
+          type="email"
+          id="reg-email"
+          placeholder="you@example.com"
+          required
+          autocomplete="email"
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="reg-password">Password</label>
+        <input
+          class="form-input"
+          type="password"
+          id="reg-password"
+          placeholder="Min. 8 characters"
+          required
+          autocomplete="new-password"
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="reg-confirm">Confirm password</label>
+        <input
+          class="form-input"
+          type="password"
+          id="reg-confirm"
+          placeholder="Repeat your password"
+          required
+          autocomplete="new-password"
+        />
+      </div>
+
+      <button class="btn btn-primary btn-full btn-lg" type="submit" id="register-btn">
+        Create account
+      </button>
+    </form>
+
+    <!-- Footer link -->
+    <p class="text-muted" style="text-align:center;">
+      Already have an account? <a href="index.html">Sign in →</a>
+    </p>
+
+  </div>
+</main>
+
+<script src="js/api.js"></script>
+<script src="js/auth.js"></script>
+</body>
+</html>

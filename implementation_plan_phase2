@@ -1,0 +1,247 @@
+# Phase 2 — Monitor CRUD + Scheduler + Pinger Engine
+
+## Goal
+Wire up the APScheduler pinger engine so that monitors are pinged on their configured interval, results are written to `check_logs`, and monitor status (`up`/`down`) is kept current. All scheduler lifecycle hooks (start, register on create, cancel on delete/pause, resume on restart) must be in place.
+
+**What's already done (Phase 1 leftovers):**
+- All ORM models exist: `Monitor`, `CheckLog`, `AlertChannel`
+- `ping_url()` in [`monitors/service.py`](file:///d:/MonitoringEngine/app/monitors/service.py) — fully implemented ✅
+- `send_alerts()` + channel senders in [`alerts/service.py`](file:///d:/MonitoringEngine/app/alerts/service.py) — fully implemented ✅
+- Monitor CRUD router in [`monitors/router.py`](file:///d:/MonitoringEngine/app/monitors/router.py) — stub (no scheduler calls yet) ⚠️
+- Logs router in [`logs/router.py`](file:///d:/MonitoringEngine/app/logs/router.py) — only `GET /logs`, missing `/logs/stats` ⚠️
+- `scheduler.py` — **does not exist yet** ❌
+- `main.py` — no lifespan, no scheduler start/stop ❌
+- `AsyncSessionLocal` already exported from [`database.py`](file:///d:/MonitoringEngine/app/database.py) ✅
+
+---
+
+## Proposed Changes
+
+### Component 1 — Scheduler Engine
+
+#### [NEW] [`scheduler.py`](file:///d:/MonitoringEngine/app/monitors/scheduler.py)
+
+Create `app/monitors/scheduler.py` with the `AsyncIOScheduler` singleton and the two public helpers (`add_monitor_job`, `remove_monitor_job`) plus the async `run_check()` job function.
+
+Key implementation details:
+- `run_check(monitor_id)` opens its own `AsyncSessionLocal` session (can't share the request-scoped `get_db()` session in a background job)
+- Reads the monitor, skips if `is_active = False` (safety guard)
+- Calls `ping_url()`, persists a `CheckLog`, updates `monitor.status` and `monitor.last_checked_at`
+- Fires `send_alerts()` **only on `up → down` transition** (prevents alert storms)
+- `add_monitor_job` uses `replace_existing=True` so calling it again after a resume is safe
+- `remove_monitor_job` is wrapped in `try/except` — silently ignores missing jobs
+
+```python
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import datetime, timezone
+from sqlalchemy import select
+from app.database import AsyncSessionLocal
+from app.monitors.models import Monitor
+from app.logs.models import CheckLog
+from app.monitors.service import ping_url
+from app.alerts.service import send_alerts
+
+scheduler = AsyncIOScheduler()
+
+async def run_check(monitor_id: str) -> None:
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Monitor).where(Monitor.id == monitor_id))
+        monitor = result.scalar()
+        if not monitor or not monitor.is_active:
+            return
+
+        ping_result = await ping_url(
+            monitor.url, monitor.method, monitor.timeout_seconds, monitor.expected_status
+        )
+
+        log = CheckLog(monitor_id=monitor.id, **ping_result)
+        db.add(log)
+
+        previous_status = monitor.status
+        monitor.status = "up" if ping_result["is_up"] else "down"
+        monitor.last_checked_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        # Alert only on up → down transition
+        if previous_status != "down" and not ping_result["is_up"]:
+            await send_alerts(monitor, ping_result["error_message"], db)
+
+def add_monitor_job(monitor_id: str, interval_minutes: int) -> None:
+    scheduler.add_job(
+        run_check,
+        trigger="interval",
+        minutes=interval_minutes,
+        id=str(monitor_id),
+        replace_existing=True,
+        args=[str(monitor_id)],
+    )
+
+def remove_monitor_job(monitor_id: str) -> None:
+    try:
+        scheduler.remove_job(str(monitor_id))
+    except Exception:
+        pass
+```
+
+> [!NOTE]
+> Using `datetime.now(timezone.utc)` instead of deprecated `datetime.utcnow()` throughout.
+
+---
+
+### Component 2 — main.py Lifespan
+
+#### [MODIFY] [`main.py`](file:///d:/MonitoringEngine/app/main.py)
+
+Replace the bare `FastAPI()` constructor with one that uses the `@asynccontextmanager` lifespan:
+
+1. **Startup**: start the scheduler, then query all `is_active=True` monitors and register their jobs (handles server restarts — jobs aren't stored in memory across restarts).
+2. **Shutdown**: gracefully shut down the scheduler.
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from sqlalchemy import select
+from app.monitors.scheduler import scheduler, add_monitor_job
+from app.database import AsyncSessionLocal
+from app.monitors.models import Monitor
+from app.users.router import router as users_router
+from app.monitors.router import router as monitors_router
+from app.logs.router import router as logs_router
+from app.alerts.router import router as alerts_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    scheduler.start()
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Monitor).where(Monitor.is_active == True))
+        for m in result.scalars().all():
+            add_monitor_job(str(m.id), m.interval_minutes)
+    yield
+    # Shutdown
+    scheduler.shutdown()
+
+app = FastAPI(title="Uptime Monitor API", version="1.0.0", lifespan=lifespan)
+app.include_router(users_router)
+app.include_router(monitors_router)
+app.include_router(logs_router)
+app.include_router(alerts_router)
+
+@app.get("/", tags=["Health"])
+async def root():
+    return {"message": "Uptime Monitor API is running!"}
+```
+
+---
+
+### Component 3 — Monitor Router (add scheduler hooks)
+
+#### [MODIFY] [`monitors/router.py`](file:///d:/MonitoringEngine/app/monitors/router.py)
+
+Four endpoints need scheduler integration:
+
+| Endpoint | Change |
+|---|---|
+| `POST /api/monitors` | After commit, call `add_monitor_job(id, interval)` |
+| `DELETE /api/monitors/{id}` | Before delete, call `remove_monitor_job(id)` |
+| `POST /api/monitors/{id}/pause` | After setting `is_active=False`, call `remove_monitor_job(id)` |
+| `POST /api/monitors/{id}/resume` | After setting `is_active=True`, call `add_monitor_job(id, interval)` |
+
+```python
+# Add import at top:
+from app.monitors.scheduler import add_monitor_job, remove_monitor_job
+
+# create_monitor — add after await db.refresh(monitor):
+add_monitor_job(str(monitor.id), monitor.interval_minutes)
+
+# delete_monitor — add before await db.delete(monitor):
+remove_monitor_job(str(monitor_id))
+
+# pause_monitor — add after await db.commit():
+remove_monitor_job(str(monitor_id))
+
+# resume_monitor — add after await db.refresh(monitor):
+add_monitor_job(str(monitor.id), monitor.interval_minutes)
+```
+
+> [!IMPORTANT]
+> `update_monitor` also needs consideration: if `interval_minutes` is changed, the existing job must be re-registered with the new interval. Add a call to `add_monitor_job()` after the update commit if `interval_minutes` is in the updated fields.
+
+---
+
+### Component 4 — Logs Router (add stats endpoint)
+
+#### [MODIFY] [`logs/router.py`](file:///d:/MonitoringEngine/app/logs/router.py)
+
+Add the `GET /api/monitors/{monitor_id}/logs/stats` endpoint:
+
+> [!WARNING]
+> FastAPI route ordering matters. `/logs/stats` **must be registered before** `/{monitor_id}/logs` to avoid FastAPI treating `"stats"` as a monitor UUID. Both are on the same router, so define the stats route first.
+
+```python
+@router.get("/{monitor_id}/logs/stats")
+async def get_stats(
+    monitor_id: UUID,
+    user_id: str = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return uptime %, avg response time, and total check count."""
+    result = await db.execute(
+        select(CheckLog).where(CheckLog.monitor_id == monitor_id)
+    )
+    logs = result.scalars().all()
+    if not logs:
+        return {"uptime_percent": 0, "avg_response_ms": 0, "total_checks": 0}
+    total = len(logs)
+    up_count = sum(1 for log in logs if log.is_up)
+    valid_ms = [log.response_time_ms for log in logs if log.response_time_ms is not None]
+    avg_ms = sum(valid_ms) / len(valid_ms) if valid_ms else 0
+    return {
+        "uptime_percent": round((up_count / total) * 100, 2),
+        "avg_response_ms": round(avg_ms),
+        "total_checks": total,
+    }
+```
+
+---
+
+## Open Questions
+
+> [!IMPORTANT]
+> **Job misfire grace time**: APScheduler by default may skip a job execution if the scheduler was busy. Should we add `misfire_grace_time` (e.g., 30s) to the `add_job()` call to allow late-firing jobs to still execute?
+
+> [!NOTE]
+> **interval_minutes update**: When a monitor's `interval_minutes` is updated via `PATCH /api/monitors/{id}`, the scheduler job should be rescheduled with the new interval. The plan includes this, but confirm: should a manual `PATCH` also reset the "next run time" immediately, or just let the current interval finish?
+
+---
+
+## Verification Plan
+
+### Automated — Server Boot
+```powershell
+.venv\Scripts\activate
+uvicorn app.main:app --reload --port 8000
+# Scheduler should log: "Scheduler started" in console
+```
+
+### Manual API Tests (via Swagger UI at http://localhost:8000/docs)
+
+| # | Test | Expected Result |
+|---|---|---|
+| 1 | `POST /api/monitors` with a valid URL (e.g. `https://httpbin.org/get`) | 201 + monitor record, scheduler job registered |
+| 2 | Wait `interval_minutes` | `check_logs` table has a new row with `is_up: true` |
+| 3 | `GET /api/monitors/{id}` | `status: "up"`, `last_checked_at` populated |
+| 4 | `POST /api/monitors` with a bad URL (e.g. `http://localhost:9999`) | After interval, `check_logs` row with `is_up: false` |
+| 5 | `GET /api/monitors/{id}/logs` | Returns list of check results |
+| 6 | `GET /api/monitors/{id}/logs/stats` | Returns `uptime_percent`, `avg_response_ms`, `total_checks` |
+| 7 | `POST /api/monitors/{id}/pause` | `is_active: false`, scheduler job removed |
+| 8 | Wait 2× interval after pause | No new rows added to `check_logs` |
+| 9 | `POST /api/monitors/{id}/resume` | `is_active: true`, job re-registered |
+| 10 | `DELETE /api/monitors/{id}` | 204, job cancelled, DB record gone |
+| 11 | Restart the server | Active monitors have jobs re-registered via lifespan |
+
+### DB Verification (psql / pgAdmin)
+```sql
+SELECT * FROM check_logs ORDER BY checked_at DESC LIMIT 10;
+SELECT id, status, last_checked_at FROM monitors;
+```

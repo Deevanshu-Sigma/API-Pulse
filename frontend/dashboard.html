@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — API Pulse</title>
+  <meta name="description" content="View and manage all your website and API monitors in one place." />
+  <link rel="stylesheet" href="css/styles.css?v=3" />
+</head>
+<body>
+
+<!-- ── Navbar ─────────────────────────────────────────────── -->
+<nav class="navbar">
+  <div class="container navbar-inner">
+    <a class="navbar-brand" href="dashboard.html">
+      <span class="brand-icon">⚡</span>
+      API Pulse
+    </a>
+    <div class="navbar-right">
+      <span class="user-email" id="user-email">—</span>
+      <button class="btn-link" id="logout-btn" title="Sign out">Sign out</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Main Content ───────────────────────────────────────── -->
+<main class="container">
+
+  <!-- Page Header -->
+  <div class="page-header">
+    <div class="page-header-left">
+      <h1>Monitors</h1>
+      <p>Track uptime for all your websites and APIs.</p>
+    </div>
+    <button class="btn btn-primary" id="add-monitor-btn">
+      + Add Monitor
+    </button>
+  </div>
+
+  <!-- Stats Pills -->
+  <div class="stats-bar" id="stats-bar">
+    <div class="stat-pill">
+      <span>Total</span>
+      <span class="pill-num" id="stat-total">—</span>
+    </div>
+    <div class="stat-pill up-pill">
+      <span>🟢 Up</span>
+      <span class="pill-num" id="stat-up">—</span>
+    </div>
+    <div class="stat-pill down-pill">
+      <span>🔴 Down</span>
+      <span class="pill-num" id="stat-down">—</span>
+    </div>
+    <div class="stat-pill">
+      <span>⏳ Pending</span>
+      <span class="pill-num" id="stat-pending">—</span>
+    </div>
+  </div>
+
+  <!-- Monitor Cards Grid -->
+  <div class="monitors-grid" id="monitors-grid">
+    <!-- Rendered by dashboard.js -->
+  </div>
+
+</main>
+
+<!-- ── Add / Edit Monitor Modal ──────────────────────────── -->
+<div class="modal-overlay" id="add-modal">
+  <div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-header">
+      <h2 id="modal-title">Add New Monitor</h2>
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="error-msg" id="modal-error"></div>
+
+      <!-- ── Basic Info ── -->
+      <div class="form-group">
+        <label class="form-label" for="m-name">Monitor Name</label>
+        <input class="form-input" type="text" id="m-name" placeholder="e.g. Production API" required />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="m-url">URL</label>
+        <input class="form-input" type="url" id="m-url" placeholder="https://api.example.com/health" required />
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="m-method">Method</label>
+          <select class="form-select" id="m-method" onchange="onMethodChange()">
+            <option value="GET">GET</option>
+            <option value="HEAD">HEAD</option>
+            <option value="POST">POST</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="m-interval">Check Every</label>
+          <select class="form-select" id="m-interval">
+            <option value="1">1 minute</option>
+            <option value="5" selected>5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="m-timeout">Timeout (seconds)</label>
+          <input class="form-input" type="number" id="m-timeout" value="10" min="2" max="60" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="m-status">Expected Status</label>
+          <input class="form-input" type="number" id="m-status" value="200" min="100" max="599" />
+        </div>
+      </div>
+
+      <!-- ── Auth / Headers Section ── -->
+      <div class="section-divider">
+        <span>Authentication</span>
+      </div>
+
+      <!-- Auth type tabs -->
+      <div class="auth-tabs" id="auth-tabs">
+        <button class="auth-tab active" data-auth-type="none"    onclick="setAuthTab('none')">None</button>
+        <button class="auth-tab"        data-auth-type="bearer"  onclick="setAuthTab('bearer')">Bearer Token</button>
+        <button class="auth-tab"        data-auth-type="api_key" onclick="setAuthTab('api_key')">API Key</button>
+        <button class="auth-tab"        data-auth-type="basic"   onclick="setAuthTab('basic')">Basic Auth</button>
+      </div>
+
+      <!-- Bearer Token -->
+      <div class="auth-fields" id="auth-bearer" style="display:none;">
+        <div class="form-group">
+          <label class="form-label" for="auth-token">Bearer Token</label>
+          <input class="form-input" type="password" id="auth-token" placeholder="eyJhbGciOiJIUzI1NiIs…" autocomplete="off" />
+          <span class="form-hint">Sent as: <code>Authorization: Bearer &lt;token&gt;</code></span>
+        </div>
+      </div>
+
+      <!-- API Key -->
+      <div class="auth-fields" id="auth-apikey" style="display:none;">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="auth-key-name">Header Name</label>
+            <input class="form-input" type="text" id="auth-key-name" placeholder="x-api-key" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="auth-key-value">Key Value</label>
+            <input class="form-input" type="password" id="auth-key-value" placeholder="sk-…" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Basic Auth -->
+      <div class="auth-fields" id="auth-basic" style="display:none;">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="auth-username">Username</label>
+            <input class="form-input" type="text" id="auth-username" placeholder="admin" autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="auth-password">Password</label>
+            <input class="form-input" type="password" id="auth-password" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Request Body (POST/PUT/PATCH only) ── -->
+      <div id="body-section" style="display:none;">
+        <div class="section-divider"><span>Request Body</span></div>
+        <div class="form-group">
+          <label class="form-label" for="m-body">JSON Body</label>
+          <textarea class="form-input form-textarea" id="m-body" rows="4"
+            placeholder='{"username": "test", "action": "ping"}'></textarea>
+          <span class="form-hint">Sent as <code>Content-Type: application/json</code>. Must be valid JSON.</span>
+        </div>
+      </div>
+
+      <!-- ── Response Assertions ── -->
+      <div class="section-divider">
+        <span>Response Assertions <span class="section-badge">optional</span></span>
+        <button class="btn btn-sm btn-secondary" type="button" onclick="addAssertion()">+ Add Rule</button>
+      </div>
+      <div id="assertions-list">
+        <!-- assertion rows injected by JS -->
+      </div>
+      <p class="form-hint" style="margin-top:0;" id="assertions-hint">
+        Rules are checked after status code. A failing rule marks the check as ❌ Down.
+      </p>
+
+    </div><!-- /modal-body -->
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-submit">Add Monitor</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast container ────────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="js/api.js?v=4"></script>
+<script src="js/dashboard.js?v=4"></script>
+</body>
+</html>
